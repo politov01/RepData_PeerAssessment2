@@ -1,0 +1,313 @@
+---
+title: "Reproducible Research: Peer Assessment 2"
+author: "Eugene Politov"
+date: "September 17, 2016"
+output: html_document
+keep_md: true
+---
+
+#Analysis of U.S. National Oceanic and Atmospheric Administration’s (NOAA) storm database
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, estimates of any fatalities, injuries, and property damage.
+
+
+##Synopsis
+
+The analysis on the storm event database revealed that tornadoes are the
+most dangerous weather event to the population health. The second most
+dangerous event type is the excessive heat. The economic impact of weather
+events was also analyzed. Flash floods and thunderstorm winds caused 
+billions of dollars in property damages between 1950 and 2011. The largest
+crop damage caused by drought, followed by flood and hails.
+
+##Data Processing
+
+### Reading the data
+
+The data for this assignment come in the form of a [comma-separated-value file](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) 
+[47Mb] compressed via the bzip2 algorithm to reduce its size. 
+You can find file in course work project folder class.
+
+There is also some documentation of the database available
+*National Weather Service [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+*National Climatic Data Center Storm Events [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+
+Set-up and downloading the data
+
+```{r read_storm_data}
+library(ggplot2)
+library(plyr)
+library(grid)
+library(gridExtra)
+library(reshape2)
+
+# Check if the data is downloaded and download when applicable
+if(!file.exists("repdata_data_StormData.csv.bz2")) { 
+    download.file(url="https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", 
+                  destfile="repdata_data_StormData.csv.bz2", mode = "wb") 
+  } 
+
+#Reading activity.csv:
+data <- read.csv(bzfile("repdata_data_StormData.csv.bz2"), header = TRUE)
+```
+
+Looking at the structure of the data.
+
+```{r}
+str(data)
+```
+
+Inspection shows that the database has the following 37 variables:
+
+```{r}
+names(data)
+```
+
+We are interested in the following variables: 
+`EVTYPE`, `BGN_DATE`, `FATALITIES`, `INJURIES`, `PROPDMG`, `PROPDMGEXP`, `CROPDMG`, `CROPDMGEXP` and only these were read into the dataset
+
+```{r}
+data_corrected <- data[, c("EVTYPE", "BGN_DATE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP")]
+str(data_corrected)
+```
+
+Before any further processing, it is advisable to check if the dataset needs
+some data cleaning, which is considered an essential part of the statistical
+analysis. 
+
+#### BGN_DATE
+
+Begin date of the event. The events could span many days, but for our purposes
+we date them with the begin date.
+
+```{r to_date, , cache=TRUE}
+data_corrected$BGN_DATE <- as.POSIXct(data_corrected$BGN_DATE,format="%m/%d/%Y %H:%M:%S")
+```
+
+#### EVTYPE
+The NOAA storm database code book reports 48 event type. The event types in the data set
+almoust 1 thousand.
+
+```{r}
+length(unique(data_corrected$EVTYPE))
+```
+
+Some difference are caused by upper and lower cases, convert them to capital letters:
+
+```{r}
+data_corrected$EVTYPE <- toupper(data_corrected$EVTYPE)
+length(unique(data_corrected$EVTYPE))
+```
+
+Trim leading and trailing whitespace
+
+```{r event_type_correction, cache=TRUE}
+data_corrected$EVTYPE <- gsub("^\\s+|\\s+$", "", data_corrected$EVTYPE)
+length(unique(data_corrected$EVTYPE))
+```
+
+After small correction count less but stay 9 hundred. Many of them are caused by
+incorrect imputation, especially in the early years.
+
+Which types of severe weather events were registered most often. Top-30 over the whole observation period. 
+
+```{r}
+sorted <- sort(table(data_corrected$EVTYPE), decreasing = TRUE, n = 20)[1:30]
+print(as.data.frame(sorted))
+```
+
+We can see, that Top-30 is the leading kind of Weather Events considering the number of registered events.
+
+#### FATALITIES and INJURIES
+
+Fatalities and injuries estimated for the event. These values are used to estimate
+the public health impact for type of events.
+
+#### PROPDMG and CROPDMG
+
+Property and crop damage estimated for the event. These values are used to estimate
+the economic impact for type of events.
+
+#### PROPDMGEXP and CROPDMGEXP
+
+These variables are associated with `PROPDMGEXP` and `CROPDMGEXP` which are used
+as exponents to interpret the numeric values for the damage.
+
+According to NWS Instruction 10-1605 (Murphy, 2016), estimates should be in the form of
+US Dollar values and rounded to three significant digits, followed by the magnitude of
+the value (i.e., 1.55B for $1,550,000,000). Values used to signify magnitude include:
+K for thousand $USD, M for million $USD, and B for billion $USD. 
+
+```{r}
+unique(data_corrected$PROPDMGEXP)
+unique(data_corrected$CROPDMGEXP)
+```
+
+Inspection shows, however, that many other values were used as magnitudes:
+K, M, 0, 3, B, 4, 2, 6, h, 5, 1, H, 9, 7, 8.
+It is impossible to be completely sure what the preparer had in mind when
+introducing these values. I can make educated guesses about their meaning,
+such as h for 100 and 6 for 1'000'000. 
+Recalculate new `PropertyDamage` and `CropDamage` variables taking these magnitude values into account.
+
+```{r}
+data_corrected$PropertyDamage <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="0"] <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="1"] <- 10
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="2"] <- 100
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="3"] <- 1000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="4"] <- 10000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="5"] <- 100000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="6"] <- 1000000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="7"] <- 10000000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="8"] <- 100000000
+
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP ==""]  <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="?"] <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="+"] <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="-"] <- 1
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="h"] <- 100
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="H"] <- 100
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="K"] <- 1000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="m"] <- 1000000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="M"] <- 1000000
+data_corrected$PropertyDamage[data_corrected$PROPDMGEXP =="B"] <- 1000000000
+table(data_corrected$PropertyDamage)
+```
+
+```{r}
+data_corrected$CropDamage <- 1
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="?"] <- 1
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="0"] <- 1
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="2"] <- 100
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="k"] <- 1000
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="K"] <- 1000
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="m"] <- 1000000
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="M"] <- 1000000
+data_corrected$CropDamage[data_corrected$CROPDMGEXP =="B"] <- 1000000000
+table(data_corrected$CropDamage)
+```
+
+See now missing value before start analisis
+
+```{r}
+missingValues <- colSums(is.na(data_corrected))/nrow(data_corrected)
+missingValues
+```
+
+Create the summarized database
+
+```{r}
+library(plyr)
+StormData <- ddply(.data = data_corrected, .variables = .(EVTYPE),
+                    Fatalities = sum(FATALITIES), 
+                    Injuries = sum(INJURIES), 
+                    PropertyDamageTotal = sum(PROPDMG * PropertyDamage), 
+                    CropDamageTotal = sum(CROPDMG * CropDamage), 
+                    summarize)
+str(StormData)
+```
+
+
+##Results
+###Question 1 - Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+As indicators for impact of severe weather events on population health take such quantitive measures as `FATALITIES` and `INJURIES`. 
+
+
+Find the top 10 event types by fatalities. 
+```{r}
+PopulationHarmFatalities <- arrange(StormData[c("EVTYPE","Fatalities")], desc(Fatalities))
+PopulationHarmFatalities <- head(PopulationHarmFatalities[c("EVTYPE","Fatalities")], 10)
+PopulationHarmFatalities
+```
+
+Tornados at the top as a cause for fatalities, excessive heat at the second place
+
+Find the top 10 event types by injuries.
+```{r}
+PopulationHarmInjuries <- arrange(StormData[c("EVTYPE","Injuries")], desc(Injuries))
+PopulationHarmInjuries <- head(PopulationHarmInjuries[c("EVTYPE","Injuries")], 10)
+PopulationHarmInjuries
+```
+
+Tornado stay at the top as a cause for person injuries. Events types around thunderstorm on the second.
+
+The following plots shows top dangerous weather event types for Population Health.
+
+```{r}
+library(ggplot2)
+plot_Fatalities <- ggplot(data = PopulationHarmFatalities, 
+                          aes(x = reorder(EVTYPE, Fatalities), 
+                              y = Fatalities, 
+                              fill = EVTYPE)) + 
+geom_bar(stat="identity") +
+coord_flip() + 
+theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+ggtitle("Top 10 by Fatalities") + 
+xlab("Weather events") + 
+ylab("Number of Deaths") +
+scale_fill_discrete(name = "Type of Event", breaks=PopulationHarmFatalities$EVTYPE)
+
+plot_Injuries <- ggplot(data = PopulationHarmInjuries, 
+                        aes(x = reorder(EVTYPE, Injuries), 
+                            y = Injuries, 
+                            fill = EVTYPE)) + 
+geom_bar(stat="identity") + 
+coord_flip() + 
+theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+ggtitle("Top 10 by Injuries") + 
+xlab("Weather events") + 
+ylab("Number of Injuries") +
+scale_fill_discrete(name = "Type of Event", breaks=PopulationHarmInjuries$EVTYPE)
+
+library(grid)
+library(gridExtra)
+grid.arrange(plot_Fatalities, plot_Injuries,  top = "Top 10 harmful weather Events for Fatalities & Injuries")
+
+
+```
+
+###Answer:
+Tornadoes cause most number of deaths and injuries among all event types. There are more than 5,000 deaths and more than 9,000 injuries in the last 60 years in US, due to tornadoes. The other event types that are most dangerous with respect to population health are excessive heat and flash floods.
+
+
+###Question 2 - Across the United States, which types of events have the greatest economic consequences?
+
+The only interpretable variables to estimate the economic consequences of severe weather events in the available data are PROPDMG (for property damage) and CROPDMG (for crop damage).
+
+Using the same techniques as for estimation of the population health impact.
+
+Find the top 10 event types by summarize Property & Crop Damages. 
+
+```{r}
+EconomicDamage <- arrange(StormData, desc(PropertyDamageTotal + CropDamageTotal))
+EconomicDamage <- head(EconomicDamage[c("EVTYPE","PropertyDamageTotal","CropDamageTotal")], 10)
+EconomicDamage
+
+library(reshape2)
+EconomicDamage_melted <- melt(EconomicDamage, id="EVTYPE")
+EconomicDamage_melted
+```
+
+The following plot shows top dangerous weather event types for harmful to economy.
+
+```{r}
+ggplot(data = EconomicDamage_melted, 
+       aes(x = EVTYPE, 
+           y = value/1000000, 
+           fill = variable)) + 
+geom_bar(stat="identity") + 
+scale_x_discrete(limits = EconomicDamage_melted$EVTYPE) +
+theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+ggtitle("Weather events with the highest economic consequences") + 
+        xlab("Weather events") + 
+        ylab("Total damage in millions $$$")
+```
+
+
+###Answer:
+As we can see the most economically challenging event is FLOOD.
